@@ -1,7 +1,8 @@
 #!/bin/bash
+export AWS_PROFILE=semanticworld
 
 # =============================================================================
-# langsam-cloud Infrastructure Management Script
+# lsemantic-world Infrastructure Management Script
 # Layer 1: VPN & Networking Stack
 # =============================================================================
 
@@ -10,7 +11,7 @@ set -e  # Exit on any error
 # Configuration
 PROJECT_NAME="semantic-world"
 STACK_LAYER="networking"
-TEMPLATE_FILE="01-networking.yaml"
+TEMPLATE_FILE="semanticworld-networking.yaml"
 DEFAULT_REGION="eu-central-1"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_PATH="${SCRIPT_DIR}/${TEMPLATE_FILE}"
