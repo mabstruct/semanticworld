@@ -1,0 +1,7 @@
+# Ignore all IDEA settings by default
+.idea/
+
+# (Optional) But track specific shared settings:
+# !.idea/codeStyles/
+# !.idea/inspectionProfiles/
+# !.idea/modules.xml
