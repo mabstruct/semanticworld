@@ -1,0 +1,30 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "semantic-world"
+  },
+  {
+    "ParameterKey": "Environment", 
+    "ParameterValue": "test"
+  },
+  {
+    "ParameterKey": "VpcCidr",
+    "ParameterValue": "10.0.0.0/16"
+  },
+  {
+    "ParameterKey": "PublicSubnetCidr1",
+    "ParameterValue": "10.0.0.0/18"
+  },
+  {
+    "ParameterKey": "PublicSubnetCidr2", 
+    "ParameterValue": "10.0.64.0/18"
+  },
+  {
+    "ParameterKey": "PrivateSubnetCidr1",
+    "ParameterValue": "10.0.128.0/18"
+  },
+  {
+    "ParameterKey": "PrivateSubnetCidr2",
+    "ParameterValue": "10.0.192.0/18"
+  }
+]
