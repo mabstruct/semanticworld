@@ -1,0 +1,38 @@
+[
+  {
+    "ParameterKey": "ProjectName",
+    "ParameterValue": "semanticworld"
+  },
+  {
+    "ParameterKey": "Environment",
+    "ParameterValue": "staging"
+  },
+  {
+    "ParameterKey": "InstanceType",
+    "ParameterValue": "g4dn.xlarge"
+  },
+  {
+    "ParameterKey": "SubnetSelection",
+    "ParameterValue": "private-1"
+  },
+  {
+    "ParameterKey": "RootVolumeSize",
+    "ParameterValue": "100"
+  },
+  {
+    "ParameterKey": "RootVolumeType",
+    "ParameterValue": "gp3"
+  },
+  {
+    "ParameterKey": "EnableDetailedMonitoring",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "KeyPairName",
+    "ParameterValue": ""
+  },
+  {
+    "ParameterKey": "AdditionalStorageSize",
+    "ParameterValue": "200"
+  }
+]

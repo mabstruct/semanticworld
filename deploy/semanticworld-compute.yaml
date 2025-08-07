@@ -1,0 +1,573 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  semantic-world Compute Layer Stack - GPU ML Instance
+  Creates GPU-enabled EC2 instance for machine learning workloads in private subnet.
+  Depends on the networking layer for VPC, subnets, and security groups.
+
+# =============================================================================
+# PARAMETERS
+# =============================================================================
+Parameters:
+  ProjectName:
+    Type: String
+    Default: semanticworld
+    Description: Project name used for resource naming and tagging
+    AllowedPattern: '^[a-z][a-z0-9-]*[a-z0-9]$'
+    ConstraintDescription: Must start with lowercase letter, contain only lowercase letters, numbers, and hyphens
+    
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, test, staging, prod]
+    Description: Environment name for resource naming and tagging
+    
+  InstanceType:
+    Type: String
+    Default: g4dn.xlarge
+    AllowedValues: 
+      - g4dn.xlarge
+      - g4dn.2xlarge
+      - g4dn.4xlarge
+      - t3.medium
+      - t3.large
+      - t3.xlarge
+    Description: EC2 instance type for compute workloads
+    
+  SubnetSelection:
+    Type: String
+    Default: private-1
+    AllowedValues: [private-1, private-2]
+    Description: Which private subnet to deploy the instance in
+    
+  RootVolumeSize:
+    Type: Number
+    Default: 50
+    MinValue: 30
+    MaxValue: 1000
+    Description: Size of the root EBS volume in GB
+    
+  RootVolumeType:
+    Type: String
+    Default: gp3
+    AllowedValues: [gp2, gp3, io1, io2]
+    Description: EBS volume type for root volume
+    
+  EnableDetailedMonitoring:
+    Type: String
+    Default: true
+    AllowedValues: [true, false]
+    Description: Enable detailed CloudWatch monitoring
+    
+  KeyPairName:
+    Type: String
+    Default: ""
+    Description: Optional EC2 Key Pair for emergency SSH access (leave empty for Session Manager only)
+    
+  AdditionalStorageSize:
+    Type: Number
+    Default: 0
+    MinValue: 0
+    MaxValue: 16384
+    Description: Size of additional EBS volume for data/models in GB (0 = no additional volume)
+
+# =============================================================================
+# MAPPINGS
+# =============================================================================
+Mappings:
+  # Deep Learning AMI mappings by region (Ubuntu-based)
+  RegionMap:
+    us-east-1:
+      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+    us-west-2:
+      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+    eu-west-1:
+      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+    eu-central-1:
+      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+    ap-southeast-1:
+      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+      
+  EnvironmentConfig:
+    dev:
+      InstanceProfile: basic
+      MonitoringLevel: standard
+      BackupRetention: 7
+    test:
+      InstanceProfile: basic
+      MonitoringLevel: standard
+      BackupRetention: 7
+    staging:
+      InstanceProfile: enhanced
+      MonitoringLevel: detailed
+      BackupRetention: 14
+    prod:
+      InstanceProfile: enhanced
+      MonitoringLevel: detailed
+      BackupRetention: 30
+
+# =============================================================================
+# CONDITIONS
+# =============================================================================
+Conditions:
+  HasKeyPair: !Not [!Equals [!Ref KeyPairName, ""]]
+  CreateAdditionalStorage: !Not [!Equals [!Ref AdditionalStorageSize, 0]]
+  IsGPUInstance: !Or
+    - !Equals [!Ref InstanceType, g4dn.xlarge]
+    - !Equals [!Ref InstanceType, g4dn.2xlarge]
+    - !Equals [!Ref InstanceType, g4dn.4xlarge]
+  UsePrivateSubnet1: !Equals [!Ref SubnetSelection, private-1]
+  UsePrivateSubnet2: !Equals [!Ref SubnetSelection, private-2]
+  EnableDetailedCloudWatch: !Equals [!Ref EnableDetailedMonitoring, true]
+  IsG4dnXlarge: !Equals [!Ref InstanceType, g4dn.xlarge]
+  IsG4dn2xlarge: !Equals [!Ref InstanceType, g4dn.2xlarge]
+  IsG4dn4xlarge: !Equals [!Ref InstanceType, g4dn.4xlarge]
+  IsT3Medium: !Equals [!Ref InstanceType, t3.medium]
+  IsT3Large: !Equals [!Ref InstanceType, t3.large]
+  IsT3Xlarge: !Equals [!Ref InstanceType, t3.xlarge]
+
+# =============================================================================
+# RESOURCES
+# =============================================================================
+Resources:
+  # ---------------------------------------------------------------------------
+  # IAM ROLE FOR COMPUTE INSTANCE
+  # ---------------------------------------------------------------------------
+  ComputeInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${Environment}-compute-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore  # Session Manager
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy   # CloudWatch Agent
+      Policies:
+        - PolicyName: ComputeInstancePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              # S3 access for model storage and data
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-*'
+                  - !Sub 'arn:aws:s3:::${ProjectName}-${Environment}-*/*'
+              # ECR access for container images
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: '*'
+              # CloudWatch custom metrics
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                  - cloudwatch:GetMetricStatistics
+                  - cloudwatch:ListMetrics
+                Resource: '*'
+              # Systems Manager parameters
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:GetParameters
+                  - ssm:GetParametersByPath
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${ProjectName}/${Environment}/*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-compute-role'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Layer
+          Value: compute
+
+  ComputeInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub '${ProjectName}-${Environment}-compute-profile'
+      Roles:
+        - !Ref ComputeInstanceRole
+
+  # ---------------------------------------------------------------------------
+  # SECURITY GROUP FOR COMPUTE INSTANCE
+  # ---------------------------------------------------------------------------
+  ComputeSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${ProjectName}-${Environment}-compute-sg'
+      GroupDescription: Security group for ML compute instances
+      VpcId:
+        Fn::ImportValue: !Sub '${ProjectName}-${Environment}-vpc-id'
+      SecurityGroupEgress:
+        # Allow all outbound for package installation and internet access
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-compute-sg'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Layer
+          Value: compute
+
+  # Allow inbound traffic from other instances in the same VPC
+  ComputeSecurityGroupIngressVPC:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ComputeSecurityGroup
+      IpProtocol: -1
+      CidrIp:
+        Fn::ImportValue: !Sub '${ProjectName}-${Environment}-vpc-cidr'
+      Description: Allow all traffic from VPC CIDR
+
+  # Optional: Allow SSH from default security group (for emergency access)
+  ComputeSecurityGroupIngressSSH:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: HasKeyPair
+    Properties:
+      GroupId: !Ref ComputeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
+        Fn::ImportValue: !Sub '${ProjectName}-${Environment}-default-sg-id'
+      Description: Allow SSH from default security group
+
+  # Prepare for future API integration (HTTP/HTTPS)
+  ComputeSecurityGroupIngressHTTP:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ComputeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp:
+        Fn::ImportValue: !Sub '${ProjectName}-${Environment}-vpc-cidr'
+      Description: Allow HTTP from VPC for future API integration
+
+  ComputeSecurityGroupIngressHTTPS:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ComputeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp:
+        Fn::ImportValue: !Sub '${ProjectName}-${Environment}-vpc-cidr'
+      Description: Allow HTTPS from VPC for future API integration
+
+  # Jupyter Notebook access (for development)
+  ComputeSecurityGroupIngressJupyter:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref ComputeSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8888
+      ToPort: 8889
+      CidrIp:
+        Fn::ImportValue: !Sub '${ProjectName}-${Environment}-vpc-cidr'
+      Description: Allow Jupyter Notebook access from VPC
+
+  # ---------------------------------------------------------------------------
+  # EBS VOLUMES
+  # ---------------------------------------------------------------------------
+  AdditionalDataVolume:
+    Type: AWS::EC2::Volume
+    Condition: CreateAdditionalStorage
+    Properties:
+      AvailabilityZone: !GetAtt ComputeInstance.AvailabilityZone
+      Size: !Ref AdditionalStorageSize
+      VolumeType: !Ref RootVolumeType
+      Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-compute-data-volume'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Layer
+          Value: compute
+        - Key: VolumeType
+          Value: data
+
+  # ---------------------------------------------------------------------------
+  # EC2 COMPUTE INSTANCE
+  # ---------------------------------------------------------------------------
+  ComputeInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', DeepLearningAMI]
+      KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref 'AWS::NoValue']
+      IamInstanceProfile: !Ref ComputeInstanceProfile
+      SecurityGroupIds:
+        - !Ref ComputeSecurityGroup
+      SubnetId: 
+        Fn::If:
+          - UsePrivateSubnet1
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+          - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+      Monitoring: !Ref EnableDetailedMonitoring
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: !Ref RootVolumeSize
+            VolumeType: !Ref RootVolumeType
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          
+          # Update system
+          apt-get update
+          
+          # Install CloudWatch agent
+          wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+          dpkg -i amazon-cloudwatch-agent.deb
+          
+          # Install additional monitoring tools
+          apt-get install -y htop nvtop awscli
+          
+          # Configure CloudWatch agent for GPU monitoring if GPU instance
+          if lspci | grep -i nvidia; then
+            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
+          {
+            "metrics": {
+              "namespace": "${ProjectName}/${Environment}/Compute",
+              "metrics_collected": {
+                "cpu": {
+                  "measurement": ["cpu_usage_idle", "cpu_usage_iowait", "cpu_usage_user", "cpu_usage_system"],
+                  "metrics_collection_interval": 60,
+                  "totalcpu": false
+                },
+                "disk": {
+                  "measurement": ["used_percent"],
+                  "metrics_collection_interval": 60,
+                  "resources": ["*"]
+                },
+                "diskio": {
+                  "measurement": ["io_time"],
+                  "metrics_collection_interval": 60,
+                  "resources": ["*"]
+                },
+                "mem": {
+                  "measurement": ["mem_used_percent"],
+                  "metrics_collection_interval": 60
+                },
+                "netstat": {
+                  "measurement": ["tcp_established", "tcp_time_wait"],
+                  "metrics_collection_interval": 60
+                }
+              }
+            },
+            "logs": {
+              "logs_collected": {
+                "files": {
+                  "collect_list": [
+                    {
+                      "file_path": "/var/log/cloud-init.log",
+                      "log_group_name": "${ProjectName}-${Environment}-compute",
+                      "log_stream_name": "{instance_id}/cloud-init.log"
+                    },
+                    {
+                      "file_path": "/var/log/cloud-init-output.log",
+                      "log_group_name": "${ProjectName}-${Environment}-compute",
+                      "log_stream_name": "{instance_id}/cloud-init-output.log"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+          EOF
+          
+            # Start CloudWatch agent
+            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+              -a fetch-config \
+              -m ec2 \
+              -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+              -s
+          fi
+          
+          # Create GPU monitoring script
+          cat > /usr/local/bin/gpu-monitor.sh << 'EOF'
+          #!/bin/bash
+          if command -v nvidia-smi >/dev/null 2>&1; then
+            # Get GPU metrics
+            gpu_util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | head -1)
+            gpu_mem_used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
+            gpu_mem_total=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
+            gpu_temp=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | head -1)
+            
+            # Calculate memory percentage
+            gpu_mem_percent=$(echo "scale=2; $gpu_mem_used * 100 / $gpu_mem_total" | bc)
+            
+            # Send to CloudWatch
+            aws cloudwatch put-metric-data \
+              --namespace "${ProjectName}/${Environment}/GPU" \
+              --metric-data \
+              MetricName=GPUUtilization,Value=$gpu_util,Unit=Percent \
+              MetricName=GPUMemoryUtilization,Value=$gpu_mem_percent,Unit=Percent \
+              MetricName=GPUTemperature,Value=$gpu_temp,Unit=None \
+              --region ${AWS::Region}
+          fi
+          EOF
+          
+          chmod +x /usr/local/bin/gpu-monitor.sh
+          
+          # Add GPU monitoring to cron (every 2 minutes)
+          echo "*/2 * * * * /usr/local/bin/gpu-monitor.sh" | crontab -
+          
+          # Signal successful completion
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ComputeInstance --region ${AWS::Region}
+          
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-compute-instance'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Layer
+          Value: compute
+        - Key: InstanceType
+          Value: !Ref InstanceType
+        - Key: GPUEnabled
+          Value: !If [IsGPUInstance, 'true', 'false']
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT15M
+        Count: 1
+
+  # ---------------------------------------------------------------------------
+  # ATTACH ADDITIONAL VOLUME
+  # ---------------------------------------------------------------------------
+  AdditionalVolumeAttachment:
+    Type: AWS::EC2::VolumeAttachment
+    Condition: CreateAdditionalStorage
+    Properties:
+      InstanceId: !Ref ComputeInstance
+      VolumeId: !Ref AdditionalDataVolume
+      Device: /dev/sdf
+
+  # ---------------------------------------------------------------------------
+  # CLOUDWATCH LOG GROUP
+  # ---------------------------------------------------------------------------
+  ComputeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '${ProjectName}-${Environment}-compute'
+      RetentionInDays: !FindInMap [EnvironmentConfig, !Ref Environment, BackupRetention]
+      Tags:
+        - Key: Name
+          Value: !Sub '${ProjectName}-${Environment}-compute-logs'
+        - Key: Project
+          Value: !Ref ProjectName
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Layer
+          Value: compute
+
+# =============================================================================
+# OUTPUTS
+# =============================================================================
+Outputs:
+  ComputeInstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref ComputeInstance
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-instance-id'
+      
+  ComputeInstancePrivateIp:
+    Description: Private IP address of the compute instance
+    Value: !GetAtt ComputeInstance.PrivateIp
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-instance-private-ip'
+      
+  ComputeInstanceType:
+    Description: Instance type of the compute instance
+    Value: !Ref InstanceType
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-instance-type'
+      
+  ComputeSecurityGroupId:
+    Description: Security Group ID for compute instances
+    Value: !Ref ComputeSecurityGroup
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-sg-id'
+      
+  ComputeInstanceRoleArn:
+    Description: IAM Role ARN for compute instances
+    Value: !GetAtt ComputeInstanceRole.Arn
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-role-arn'
+      
+  SubnetUsed:
+    Description: Subnet where the instance is deployed
+    Value: 
+      Fn::If:
+        - UsePrivateSubnet1
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-1-id'
+        - Fn::ImportValue: !Sub '${ProjectName}-${Environment}-private-subnet-2-id'
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-subnet-id'
+      
+  AvailabilityZone:
+    Description: Availability Zone of the compute instance
+    Value: !GetAtt ComputeInstance.AvailabilityZone
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-az'
+      
+  SessionManagerConnectionCommand:
+    Description: AWS CLI command to connect via Session Manager
+    Value: !Sub 'aws ssm start-session --target ${ComputeInstance} --region ${AWS::Region}'
+    
+  GPUEnabled:
+    Description: Whether this instance has GPU capabilities
+    Value: !If [IsGPUInstance, 'true', 'false']
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-gpu-enabled'
+      
+  LogGroupName:
+    Description: CloudWatch Log Group for compute instance logs
+    Value: !Ref ComputeLogGroup
+    Export:
+      Name: !Sub '${ProjectName}-${Environment}-compute-log-group'
+      
+  EstimatedHourlyCost:
+    Description: Estimated hourly cost in USD (approximate)
+    Value: !If
+      - IsG4dnXlarge
+      - '$0.526'
+      - !If
+        - IsG4dn2xlarge
+        - '$0.752'
+        - !If
+          - IsG4dn4xlarge
+          - '$1.505'
+          - !If
+            - IsT3Medium
+            - '$0.0416'
+            - !If
+              - IsT3Large
+              - '$0.0832'
+              - '$0.1664'
