@@ -69,23 +69,42 @@ Parameters:
     MinValue: 0
     MaxValue: 16384
     Description: Size of additional EBS volume for data/models in GB (0 = no additional volume)
+    
+  AMIType:
+    Type: String
+    Default: deep-learning-ubuntu
+    AllowedValues: 
+      - deep-learning-ubuntu
+      - amazon-linux-2023
+      - amazon-linux-2023-ml
+    Description: AMI type to use for the compute instance
 
 # =============================================================================
 # MAPPINGS
 # =============================================================================
 Mappings:
-  # Deep Learning AMI mappings by region (Ubuntu-based)
+  # AMI mappings by region - Multiple OS options available
   RegionMap:
     us-east-1:
-      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+      DeepLearningAMI: ami-0c02fb55956c7d316      # Deep Learning AMI (Ubuntu 18.04)
+      AmazonLinux2023: ami-0abcdef1234567890      # Amazon Linux 2023
+      AmazonLinux2023ML: ami-0fedcba0987654321    # Amazon Linux 2023 with ML tools
     us-west-2:
-      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+      DeepLearningAMI: ami-0c02fb55956c7d316      # Deep Learning AMI (Ubuntu 18.04)
+      AmazonLinux2023: ami-0abcdef1234567890      # Amazon Linux 2023
+      AmazonLinux2023ML: ami-0fedcba0987654321    # Amazon Linux 2023 with ML tools
     eu-west-1:
-      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+      DeepLearningAMI: ami-0c02fb55956c7d316      # Deep Learning AMI (Ubuntu 18.04)
+      AmazonLinux2023: ami-0abcdef1234567890      # Amazon Linux 2023
+      AmazonLinux2023ML: ami-0fedcba0987654321    # Amazon Linux 2023 with ML tools
     eu-central-1:
-      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+      DeepLearningAMI: ami-0c02fb55956c7d316      # Deep Learning AMI (Ubuntu 18.04)
+      AmazonLinux2023: ami-0abcdef1234567890      # Amazon Linux 2023
+      AmazonLinux2023ML: ami-0fedcba0987654321    # Amazon Linux 2023 with ML tools
     ap-southeast-1:
-      DeepLearningAMI: ami-0c02fb55956c7d316  # Deep Learning AMI (Ubuntu 18.04)
+      DeepLearningAMI: ami-0c02fb55956c7d316      # Deep Learning AMI (Ubuntu 18.04)
+      AmazonLinux2023: ami-0abcdef1234567890      # Amazon Linux 2023
+      AmazonLinux2023ML: ami-0fedcba0987654321    # Amazon Linux 2023 with ML tools
       
   EnvironmentConfig:
     dev:
@@ -124,6 +143,9 @@ Conditions:
   IsT3Medium: !Equals [!Ref InstanceType, t3.medium]
   IsT3Large: !Equals [!Ref InstanceType, t3.large]
   IsT3Xlarge: !Equals [!Ref InstanceType, t3.xlarge]
+  UseDeepLearningAMI: !Equals [!Ref AMIType, deep-learning-ubuntu]
+  UseAmazonLinux2023: !Equals [!Ref AMIType, amazon-linux-2023]
+  UseAmazonLinux2023ML: !Equals [!Ref AMIType, amazon-linux-2023-ml]
 
 # =============================================================================
 # RESOURCES
@@ -314,7 +336,13 @@ Resources:
     Type: AWS::EC2::Instance
     Properties:
       InstanceType: !Ref InstanceType
-      ImageId: !FindInMap [RegionMap, !Ref 'AWS::Region', DeepLearningAMI]
+      ImageId: !If
+        - UseDeepLearningAMI
+        - !FindInMap [RegionMap, !Ref 'AWS::Region', DeepLearningAMI]
+        - !If
+          - UseAmazonLinux2023
+          - !FindInMap [RegionMap, !Ref 'AWS::Region', AmazonLinux2023]
+          - !FindInMap [RegionMap, !Ref 'AWS::Region', AmazonLinux2023ML]
       KeyName: !If [HasKeyPair, !Ref KeyPairName, !Ref 'AWS::NoValue']
       IamInstanceProfile: !Ref ComputeInstanceProfile
       SecurityGroupIds:
@@ -335,109 +363,64 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
           #!/bin/bash
-          set -e
           
-          # Update system
-          apt-get update
+          # Update system and install CloudWatch agent
+          if grep -qi ubuntu /etc/os-release; then
+            # Ubuntu (Deep Learning AMI)
+            apt-get update
+            apt-get install -y awscli
+            wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
+            dpkg -i amazon-cloudwatch-agent.deb
+          else
+            # Amazon Linux
+            yum update -y
+            yum install -y awscli
+            yum install -y amazon-cloudwatch-agent
+          fi
           
-          # Install CloudWatch agent
-          wget https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/amd64/latest/amazon-cloudwatch-agent.deb
-          dpkg -i amazon-cloudwatch-agent.deb
+          # Install Systems Manager agent
+          if ! systemctl is-active --quiet amazon-ssm-agent; then
+            if grep -qi ubuntu /etc/os-release; then
+              snap install amazon-ssm-agent --classic
+            else
+              yum install -y amazon-ssm-agent
+            fi
+            systemctl enable amazon-ssm-agent
+            systemctl start amazon-ssm-agent
+          fi
           
-          # Install additional monitoring tools
-          apt-get install -y htop nvtop awscli
-          
-          # Configure CloudWatch agent for GPU monitoring if GPU instance
-          if lspci | grep -i nvidia; then
-            cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
+          # Configure CloudWatch agent for GPU monitoring
+          cat > /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json << 'EOF'
           {
             "metrics": {
-              "namespace": "${ProjectName}/${Environment}/Compute",
+              "namespace": "AWS/EC2/GPU",
               "metrics_collected": {
-                "cpu": {
-                  "measurement": ["cpu_usage_idle", "cpu_usage_iowait", "cpu_usage_user", "cpu_usage_system"],
-                  "metrics_collection_interval": 60,
-                  "totalcpu": false
-                },
-                "disk": {
-                  "measurement": ["used_percent"],
-                  "metrics_collection_interval": 60,
-                  "resources": ["*"]
-                },
-                "diskio": {
-                  "measurement": ["io_time"],
-                  "metrics_collection_interval": 60,
-                  "resources": ["*"]
-                },
-                "mem": {
-                  "measurement": ["mem_used_percent"],
+                "nvidia_gpu": {
+                  "measurement": ["utilization_gpu", "utilization_memory", "temperature_gpu", "power_draw"],
                   "metrics_collection_interval": 60
-                },
-                "netstat": {
-                  "measurement": ["tcp_established", "tcp_time_wait"],
-                  "metrics_collection_interval": 60
-                }
-              }
-            },
-            "logs": {
-              "logs_collected": {
-                "files": {
-                  "collect_list": [
-                    {
-                      "file_path": "/var/log/cloud-init.log",
-                      "log_group_name": "${ProjectName}-${Environment}-compute",
-                      "log_stream_name": "{instance_id}/cloud-init.log"
-                    },
-                    {
-                      "file_path": "/var/log/cloud-init-output.log",
-                      "log_group_name": "${ProjectName}-${Environment}-compute",
-                      "log_stream_name": "{instance_id}/cloud-init-output.log"
-                    }
-                  ]
                 }
               }
             }
           }
           EOF
           
-            # Start CloudWatch agent
-            /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
-              -a fetch-config \
-              -m ec2 \
-              -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
-              -s
+          # Start CloudWatch agent
+          /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl 
+            -a fetch-config -m ec2 -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json -s
+          
+          # Install Docker if not present
+          if ! command -v docker &> /dev/null; then
+            if grep -qi ubuntu /etc/os-release; then
+              apt-get install -y docker.io
+            else
+              yum install -y docker
+            fi
+            systemctl enable docker
+            systemctl start docker
+            usermod -a -G docker ec2-user
           fi
           
-          # Create GPU monitoring script
-          cat > /usr/local/bin/gpu-monitor.sh << 'EOF'
-          #!/bin/bash
-          if command -v nvidia-smi >/dev/null 2>&1; then
-            # Get GPU metrics
-            gpu_util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | head -1)
-            gpu_mem_used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits | head -1)
-            gpu_mem_total=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -1)
-            gpu_temp=$(nvidia-smi --query-gpu=temperature.gpu --format=csv,noheader,nounits | head -1)
-            
-            # Calculate memory percentage
-            gpu_mem_percent=$(echo "scale=2; $gpu_mem_used * 100 / $gpu_mem_total" | bc)
-            
-            # Send to CloudWatch
-            aws cloudwatch put-metric-data \
-              --namespace "${ProjectName}/${Environment}/GPU" \
-              --metric-data \
-              MetricName=GPUUtilization,Value=$gpu_util,Unit=Percent \
-              MetricName=GPUMemoryUtilization,Value=$gpu_mem_percent,Unit=Percent \
-              MetricName=GPUTemperature,Value=$gpu_temp,Unit=None \
-              --region ${AWS::Region}
-          fi
-          EOF
-          
-          chmod +x /usr/local/bin/gpu-monitor.sh
-          
-          # Add GPU monitoring to cron (every 2 minutes)
-          echo "*/2 * * * * /usr/local/bin/gpu-monitor.sh" | crontab -
-          
-          # Signal successful completion
+          # Signal completion
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource ComputeInstance --region ${AWS::Region}
           
       Tags:

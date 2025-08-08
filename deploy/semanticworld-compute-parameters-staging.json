@@ -28,6 +28,10 @@
     "ParameterValue": "true"
   },
   {
+    "ParameterKey": "AMIType",
+    "ParameterValue": "amazon-linux-2023"
+  },
+  {
     "ParameterKey": "KeyPairName",
     "ParameterValue": ""
   },

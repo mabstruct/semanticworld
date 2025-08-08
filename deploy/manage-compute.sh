@@ -484,6 +484,11 @@ show_connection_info() {
         
         echo
         log_success "Instance ID: $instance_id"
+        
+        # Show AMI type from stack parameters
+        local ami_type=$(aws cloudformation describe-stacks --stack-name "$stack_name" --query 'Stacks[0].Parameters[?ParameterKey==`AMIType`].ParameterValue' --output text --region $region 2>/dev/null || echo "not-specified")
+        log_success "AMI Type: $ami_type"
+        
         log_success "Session Manager connection:"
         echo "  aws ssm start-session --target $instance_id --region $region"
         echo

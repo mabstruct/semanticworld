@@ -9,7 +9,7 @@ export AWS_PROFILE=semanticworld
 set -e  # Exit on any error
 
 # Configuration
-PROJECT_NAME="semantic-world"
+PROJECT_NAME="semanticworld"
 STACK_LAYER="networking"
 TEMPLATE_FILE="semanticworld-networking.yaml"
 DEFAULT_REGION="eu-central-1"
