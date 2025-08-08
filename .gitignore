@@ -5,3 +5,4 @@
 # !.idea/codeStyles/
 # !.idea/inspectionProfiles/
 # !.idea/modules.xml
+.secrets/mabcli_accessKeys.csv
