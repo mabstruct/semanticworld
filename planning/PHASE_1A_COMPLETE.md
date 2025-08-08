@@ -208,3 +208,77 @@ API Layer (future Phase 2)
 Phase 1A: Foundation Setup has been completed successfully with all deliverables meeting the specified requirements. The compute layer is now ready for deployment and testing in Phase 1C, with comprehensive management automation and professional-grade infrastructure templates.
 
 The implementation follows all established project methodologies, maintains security-first principles, and provides the foundation for future API integration phases. All BDD scenarios from the Phase 1A specifications are now technically feasible and ready for validation testing.
+
+
+
+
+# UPDATE 2025-08-07: Phase 1A Template Updates - AMI Selection Support
+
+## Summary
+Updated the CloudFormation template and related configuration files to support multiple AMI types based on user requirements for Amazon Linux 2023 and existing key pair usage.
+
+## Changes Made
+
+### 1. CloudFormation Template Updates (`semanticworld-compute.yaml`)
+
+#### New AMI Type Parameter
+- Added `AMIType` parameter with three options:
+  - `deep-learning-ubuntu` (default) - Deep Learning AMI with Ubuntu
+  - `amazon-linux-2023` - Standard Amazon Linux 2023
+  - `amazon-linux-2023-ml` - Amazon Linux 2023 with ML tools
+
+#### Updated Region Mappings
+- Extended `RegionMap` to include all three AMI types across multiple regions
+- Each region now has mappings for:
+  - `DeepLearningAMI` - Deep Learning Ubuntu AMI
+  - `AmazonLinux2023` - Standard Amazon Linux 2023
+  - `AmazonLinux2023ML` - Amazon Linux 2023 with ML frameworks
+
+#### New Conditions
+- `UseDeepLearningAMI` - When AMI type is deep-learning-ubuntu
+- `UseAmazonLinux2023` - When AMI type is amazon-linux-2023  
+- `UseAmazonLinux2023ML` - When AMI type is amazon-linux-2023-ml
+
+#### EC2 Instance Updates
+- Modified `ImageId` property to use conditional AMI selection based on `AMIType` parameter
+- Uses nested `Fn::If` conditions to select the appropriate AMI
+
+#### UserData Script Improvements
+- Added OS detection logic to handle both Ubuntu and Amazon Linux package managers
+- Supports `apt-get` for Ubuntu-based AMIs and `yum` for Amazon Linux
+- Unified installation scripts for CloudWatch agent, Systems Manager, and Docker
+- Proper service management for different OS types
+
+### 2. Parameter Files Updates
+- Updated all parameter files to include the new `AMIType` parameter
+- Set default to `amazon-linux-2023` as requested by user
+- Files updated:
+  - `semanticworld-compute-parameters-dev.json`
+  - `semanticworld-compute-parameters-test.json` (recreated due to corruption)
+  - `semanticworld-compute-parameters-staging.json`
+
+### 3. Management Script Enhancement (`manage-compute.sh`)
+- Added AMI type display in connection information
+- Shows the selected AMI type from stack parameters when using `connect` command
+- Provides better visibility into the deployed configuration
+
+## Template Validation
+- CloudFormation template validation successful
+- All parameters properly detected including new `AMIType` parameter
+- Template requires `CAPABILITY_NAMED_IAM` for IAM role creation
+
+## Configuration Options
+Users can now:
+1. Choose between three different AMI types at deployment time
+2. Use existing EC2 key pairs or rely solely on Session Manager access
+3. Deploy with optimal OS choice for their specific ML workloads
+
+## Default Settings
+- AMI Type: `amazon-linux-2023` (user preference)
+- Key Pair: Empty string (Session Manager only access)
+- Maintains all existing security and monitoring configurations
+
+## Next Steps
+- Template is ready for deployment with new AMI selection features
+- Users can modify parameter files to choose different AMI types per environment
+- All existing functionality (GPU monitoring, Session Manager access, cost tracking) remains intact
